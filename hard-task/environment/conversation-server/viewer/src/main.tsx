@@ -15,8 +15,10 @@ import python from "highlight.js/lib/languages/python";
 import typescript from "highlight.js/lib/languages/typescript";
 import xml from "highlight.js/lib/languages/xml";
 import yaml from "highlight.js/lib/languages/yaml";
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import ReactMarkdown, { type Components } from "react-markdown";
 import { createRoot } from "react-dom/client";
+import remarkGfm from "remark-gfm";
 
 type Role = "simulated_user" | "agent";
 
@@ -35,6 +37,8 @@ type Transcript = {
 type ConnectionState = "connecting" | "live" | "error";
 
 const EXIT_MESSAGE = "You may exit now.";
+const UPDATE_RETRY_MS = 1000;
+const REMARK_PLUGINS = [remarkGfm];
 const LANGUAGE_ALIASES: Record<string, string> = {
   html: "xml",
   js: "javascript",
@@ -61,6 +65,30 @@ function roleLabel(role: Role): string {
   return role === "simulated_user" ? "User" : "Agent";
 }
 
+function sleep(milliseconds: number): Promise<void> {
+  return new Promise((resolve) => window.setTimeout(resolve, milliseconds));
+}
+
+function maxEventId(events: TranscriptEvent[]): number {
+  return events.reduce((maxId, event) => Math.max(maxId, event.id), 0);
+}
+
+function mergeTranscript(
+  currentTranscript: Transcript | null,
+  events: TranscriptEvent[],
+): Transcript {
+  const byId = new Map<number, TranscriptEvent>();
+  for (const event of currentTranscript?.events ?? []) {
+    byId.set(event.id, event);
+  }
+  for (const event of events) {
+    byId.set(event.id, event);
+  }
+  return {
+    events: Array.from(byId.values()).sort((left, right) => left.id - right.id),
+  };
+}
+
 function normalizeLanguage(language: string): string {
   const normalized = language.trim().toLowerCase();
   return LANGUAGE_ALIASES[normalized] ?? normalized;
@@ -85,36 +113,57 @@ function highlightedCode(code: string, language: string | null): string {
   }
 }
 
-function renderMessage(message: string) {
-  const parts = message.split(/```/g);
+type CodeElementProps = {
+  children?: React.ReactNode;
+  className?: string;
+};
 
-  return parts.map((part, index) => {
-    const isCode = index % 2 === 1;
-    if (isCode) {
-      const lines = part.replace(/^\n/, "").replace(/\n$/, "").split("\n");
-      const firstLine = lines[0] ?? "";
-      const hasLanguage = firstLine.trim() !== "" && !firstLine.includes(" ");
-      const language = hasLanguage ? normalizeLanguage(firstLine) : null;
-      const code = hasLanguage ? lines.slice(1).join("\n") : lines.join("\n");
-      const html = highlightedCode(code, language);
+function CodeBlock({
+  children,
+  className,
+}: CodeElementProps): React.ReactElement {
+  const match = /(?:^|\s)language-([^\s]+)/.exec(className ?? "");
+  const language = match ? normalizeLanguage(match[1]) : null;
+  const code = String(children ?? "").replace(/\n$/, "");
+  const html = highlightedCode(code, language);
 
-      return (
-        <div className="code-frame" key={`code-${index}`}>
-          {language ? <div className="code-language">{language}</div> : null}
-          <pre className="code-block">
-            <code dangerouslySetInnerHTML={{ __html: html }} />
-          </pre>
-        </div>
-      );
+  return (
+    <div className="code-frame">
+      {language ? <div className="code-language">{language}</div> : null}
+      <pre className="code-block">
+        <code dangerouslySetInnerHTML={{ __html: html }} />
+      </pre>
+    </div>
+  );
+}
+
+const markdownComponents: Components = {
+  code({ children, className, node: _node, ...props }) {
+    return (
+      <code className={className} {...props}>
+        {children}
+      </code>
+    );
+  },
+  pre({ children }) {
+    const child = React.Children.toArray(children)[0];
+    if (React.isValidElement<CodeElementProps>(child)) {
+      return <CodeBlock {...child.props} />;
     }
 
-    return part
-      .split(/\n{2,}/g)
-      .filter((paragraph) => paragraph.trim().length > 0)
-      .map((paragraph, paragraphIndex) => (
-        <p key={`text-${index}-${paragraphIndex}`}>{paragraph}</p>
-      ));
-  });
+    return <pre>{children}</pre>;
+  },
+};
+
+function renderMessage(message: string) {
+  return (
+    <ReactMarkdown
+      components={markdownComponents}
+      remarkPlugins={REMARK_PLUGINS}
+    >
+      {message}
+    </ReactMarkdown>
+  );
 }
 
 function App() {
@@ -123,6 +172,7 @@ function App() {
     useState<ConnectionState>("connecting");
   const [errorMessage, setErrorMessage] = useState<string>("");
   const [autoRefresh, setAutoRefresh] = useState(true);
+  const lastEventIdRef = useRef(0);
 
   const refreshTranscript = useCallback(async () => {
     try {
@@ -131,6 +181,7 @@ function App() {
         throw new Error(`HTTP ${response.status}`);
       }
       const nextTranscript = (await response.json()) as Transcript;
+      lastEventIdRef.current = maxEventId(nextTranscript.events);
       setTranscript(nextTranscript);
       setConnectionState("live");
       setErrorMessage("");
@@ -148,11 +199,57 @@ function App() {
     if (!autoRefresh) {
       return;
     }
-    const interval = window.setInterval(() => {
-      void refreshTranscript();
-    }, 700);
-    return () => window.clearInterval(interval);
-  }, [autoRefresh, refreshTranscript]);
+
+    const controller = new AbortController();
+    let stopped = false;
+
+    async function pollForUpdates() {
+      while (!stopped) {
+        try {
+          const response = await fetch(
+            `/transcript/updates?after_id=${lastEventIdRef.current}`,
+            {
+              cache: "no-store",
+              signal: controller.signal,
+            },
+          );
+          if (!response.ok) {
+            throw new Error(`HTTP ${response.status}`);
+          }
+
+          const update = (await response.json()) as Transcript;
+          if (stopped) {
+            return;
+          }
+
+          if (update.events.length > 0) {
+            lastEventIdRef.current = Math.max(
+              lastEventIdRef.current,
+              maxEventId(update.events),
+            );
+            setTranscript((currentTranscript) =>
+              mergeTranscript(currentTranscript, update.events),
+            );
+          }
+          setConnectionState("live");
+          setErrorMessage("");
+        } catch (error) {
+          if (stopped || controller.signal.aborted) {
+            return;
+          }
+          setConnectionState("error");
+          setErrorMessage(error instanceof Error ? error.message : String(error));
+          await sleep(UPDATE_RETRY_MS);
+        }
+      }
+    }
+
+    void pollForUpdates();
+    return () => {
+      stopped = true;
+      controller.abort();
+    };
+  }, [autoRefresh]);
 
   const simulatedUserMessages =
     transcript?.events.filter((event) => event.role === "simulated_user").length ?? 0;

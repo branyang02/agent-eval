@@ -5,6 +5,7 @@ uv run pytest hard-task/environment/conversation-server/test/test_server.py -v
 import importlib.util
 import json
 import sys
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
 from threading import Thread
@@ -76,6 +77,9 @@ def conversation_server(tmp_path):
 def test_health_and_empty_transcript(conversation_server):
     assert get_json(f"{conversation_server.base_url}/healthz") == {"ok": True}
     assert get_json(f"{conversation_server.base_url}/transcript") == {"events": []}
+    assert get_json(
+        f"{conversation_server.base_url}/transcript/updates?after_id=0"
+    ) == {"events": []}
 
 
 def test_agent_receives_simulated_user_messages_in_turn_order(conversation_server):
@@ -112,6 +116,11 @@ def test_agent_receives_simulated_user_messages_in_turn_order(conversation_serve
     assert next_message["event"]["id"] == 2
     assert next_message["message"] == "second user request"
 
+    transcript_updates = get_json(
+        f"{conversation_server.base_url}/transcript/updates?after_id=2"
+    )
+    assert transcript_updates["events"] == [reply["event"]]
+
 
 def test_simulated_user_receives_agent_replies_after_event_id(conversation_server):
     reply = post_json(
@@ -127,6 +136,20 @@ def test_simulated_user_receives_agent_replies_after_event_id(conversation_serve
         f"{conversation_server.base_url}/agent-reply?after_id={reply['event']['id']}"
     )
     assert timed_out == {"available": False, "event": None}
+
+
+def test_transcript_updates_wait_for_new_events(conversation_server):
+    with ThreadPoolExecutor(max_workers=1) as executor:
+        future = executor.submit(
+            get_json,
+            f"{conversation_server.base_url}/transcript/updates?after_id=0",
+        )
+        reply = post_json(
+            f"{conversation_server.base_url}/reply",
+            {"message": "agent reply"},
+        )
+
+        assert future.result(timeout=2) == {"events": [reply["event"]]}
 
 
 def test_empty_messages_are_rejected(conversation_server):

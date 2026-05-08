@@ -37,6 +37,9 @@ class State:
     def role_events(self, role: str) -> list[dict]:
         return [event for event in self.events if event["role"] == role]
 
+    def events_after(self, after_id: int) -> list[dict]:
+        return [event for event in self.events if event["id"] > after_id]
+
 
 class ConversationServer(ThreadingHTTPServer):
     def __init__(self, config: Config) -> None:
@@ -90,6 +93,10 @@ class Handler(BaseHTTPRequestHandler):
                 self.send_json({"events": list(self.state.events)})
             return
 
+        if parsed.path == "/transcript/updates":
+            self.handle_transcript_updates_request(parsed.query)
+            return
+
         if parsed.path == "/message":
             self.handle_agent_message_request()
             return
@@ -135,6 +142,24 @@ class Handler(BaseHTTPRequestHandler):
                 remaining = deadline - time.time()
                 if remaining <= 0:
                     self.send_json({"available": False, "message": None})
+                    return
+
+                self.state.condition.wait(timeout=remaining)
+
+    def handle_transcript_updates_request(self, query_string: str) -> None:
+        after_id = int(parse_qs(query_string).get("after_id", ["0"])[0])
+        deadline = time.time() + self.long_poll_seconds
+
+        with self.state.condition:
+            while True:
+                events = self.state.events_after(after_id)
+                if events:
+                    self.send_json({"events": events})
+                    return
+
+                remaining = deadline - time.time()
+                if remaining <= 0:
+                    self.send_json({"events": []})
                     return
 
                 self.state.condition.wait(timeout=remaining)
