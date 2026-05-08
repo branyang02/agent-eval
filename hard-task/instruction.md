@@ -1,15 +1,15 @@
 # Hard Task
 
 You are being evaluated in an environment that includes a conversation server.
-A separate simulated-user process is connected to that server and has the actual
-task instructions. Your job is to talk to the simulated user through the server,
+A separate user process is connected to that server and has the actual
+task instructions. Your job is to talk to the user through the server,
 complete the requested work, and report back after each step.
 
 The conversation server is available at `http://conversation-server:8000`.
 
 Use this protocol:
 
-1. Read the current simulated-user message with:
+1. Read the current user message with:
 
    ```bash
    curl -s http://conversation-server:8000/message
@@ -18,7 +18,7 @@ Use this protocol:
    The response is JSON with an `available` field and, when available, a
    `message` field. If no message is available yet, wait briefly and retry.
 
-2. Follow the simulated user's instruction.
+2. Follow the user's instruction.
 
 3. When you have completed that instruction, send a short reply:
 
@@ -29,10 +29,10 @@ Use this protocol:
    ```
 
 4. Read the next message from `http://conversation-server:8000/message` and continue.
-   Repeat this loop for as many turns as the simulated user needs.
+   Repeat this loop for as many turns as the user needs.
 
-Important: do not exit until the simulated user sends the exact message
+Important: do not exit until the user sends the exact message
 `You may exit now.`. Harbor considers the evaluation finished when your agent
-process exits, so exiting early will end the task before the simulated user has
+process exits, so exiting early will end the task before the user has
 finished the interaction. When you receive that exact exit message, exit
 immediately without posting another reply.
