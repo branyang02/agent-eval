@@ -1,23 +1,52 @@
 #!/bin/bash
 
-# Use this file to install test dependencies and run the tests.
+# Use this file to install test dependencies and run the verifier.
 # It will be copied to /tests/test.sh and run from the working directory.
 
 apt-get update
-apt-get install -y curl
+apt-get install -y ca-certificates python3
 
-curl -LsSf https://astral.sh/uv/0.9.7/install.sh | sh
+mkdir -p /logs/verifier
 
-source $HOME/.local/bin/env
+python3 /tests/static_checks.py 2>&1 | tee /logs/verifier/static_checks_stdout.txt
+static_checks_status=${PIPESTATUS[0]}
 
-# CTRF produces a standard test report in JSON format which is useful for logging.
-uvx \
-  --with pytest==8.4.1 \
-  --with pytest-json-ctrf==0.3.5 \
-  pytest --ctrf /logs/verifier/ctrf.json /tests/test_outputs.py -rA
+python3 /tests/llm_judge.py 2>&1 | tee /logs/verifier/llm_judge_stdout.txt
+llm_judge_status=${PIPESTATUS[0]}
 
-if [ $? -eq 0 ]; then
-  echo 1 > /logs/verifier/reward.txt
+if [ "$llm_judge_status" -ne 0 ]; then
+  echo 0 > /logs/verifier/reward.txt
+  exit 0
+fi
+
+score=$(python3 - <<'PY'
+import json
+
+with open("/logs/verifier/llm_judge.json", "r", encoding="utf-8") as handle:
+    judgment = json.load(handle)
+
+score = judgment.get("score", 0.0)
+try:
+    score = float(score)
+except (TypeError, ValueError):
+    score = 0.0
+
+score = max(0.0, min(1.0, score))
+print(score)
+PY
+)
+
+if [ -n "$score" ]; then
+  if [ "$static_checks_status" -ne 0 ]; then
+    score=$(SCORE="$score" python3 - <<'PY'
+import os
+
+score = float(os.environ["SCORE"])
+print(min(score, 0.5))
+PY
+)
+  fi
+  echo "$score" > /logs/verifier/reward.txt
 else
   echo 0 > /logs/verifier/reward.txt
 fi

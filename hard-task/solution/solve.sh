@@ -1,4 +1,7 @@
 #!/bin/bash
 set -euo pipefail
 
-python3 "$(dirname "$0")/solve.py"
+exec 2>&1
+
+mkdir -p /app
+python3 /solution/solve.py

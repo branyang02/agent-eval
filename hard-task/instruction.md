@@ -25,7 +25,7 @@ Use this protocol:
    ```bash
    curl -s -X POST http://conversation-server:8000/reply \
      -H 'Content-Type: application/json' \
-     -d '{"message":"completed the requested step"}'
+     -d '{"message":"......."}'
    ```
 
 4. Read the next message from `http://conversation-server:8000/message` and continue.
