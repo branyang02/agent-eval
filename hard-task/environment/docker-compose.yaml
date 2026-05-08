@@ -1,0 +1,40 @@
+services:
+  main:
+    depends_on:
+      conversation-server:
+        condition: service_healthy
+      simulated-user:
+        condition: service_healthy
+
+  conversation-server:
+    build:
+      context: ./conversation-server
+    expose:
+      - "8000"
+    ports:
+      - "127.0.0.1:${CONVERSATION_HOST_PORT:-18080}:8000"
+    healthcheck:
+      test:
+        [
+          "CMD",
+          "python3",
+          "-c",
+          "import urllib.request; urllib.request.urlopen('http://localhost:8000/healthz', timeout=2).read()",
+        ]
+      interval: 2s
+      timeout: 5s
+      retries: 30
+
+  simulated-user:
+    build:
+      context: ./simulated-user
+    depends_on:
+      conversation-server:
+        condition: service_healthy
+    environment:
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:?OPENROUTER_API_KEY must be set}
+    healthcheck:
+      test: ["CMD", "test", "-f", "/tmp/sim-user-ready"]
+      interval: 2s
+      timeout: 5s
+      retries: 30
