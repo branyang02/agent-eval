@@ -27,3 +27,6 @@ To run full evaluation:
 ```bash
 ./run_all.sh
 ```
+
+## Write Up
+`/submission/submission.pdf`.
