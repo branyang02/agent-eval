@@ -5,6 +5,16 @@ import {
   CircleDot,
   RefreshCw,
 } from "lucide-react";
+import hljs from "highlight.js/lib/core";
+import bash from "highlight.js/lib/languages/bash";
+import css from "highlight.js/lib/languages/css";
+import javascript from "highlight.js/lib/languages/javascript";
+import json from "highlight.js/lib/languages/json";
+import markdown from "highlight.js/lib/languages/markdown";
+import python from "highlight.js/lib/languages/python";
+import typescript from "highlight.js/lib/languages/typescript";
+import xml from "highlight.js/lib/languages/xml";
+import yaml from "highlight.js/lib/languages/yaml";
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
 
@@ -25,9 +35,54 @@ type Transcript = {
 type ConnectionState = "connecting" | "live" | "error";
 
 const EXIT_MESSAGE = "You may exit now.";
+const LANGUAGE_ALIASES: Record<string, string> = {
+  html: "xml",
+  js: "javascript",
+  md: "markdown",
+  py: "python",
+  shell: "bash",
+  sh: "bash",
+  ts: "typescript",
+  yml: "yaml",
+  zsh: "bash",
+};
+
+hljs.registerLanguage("bash", bash);
+hljs.registerLanguage("css", css);
+hljs.registerLanguage("javascript", javascript);
+hljs.registerLanguage("json", json);
+hljs.registerLanguage("markdown", markdown);
+hljs.registerLanguage("python", python);
+hljs.registerLanguage("typescript", typescript);
+hljs.registerLanguage("xml", xml);
+hljs.registerLanguage("yaml", yaml);
 
 function roleLabel(role: Role): string {
   return role === "simulated_user" ? "User" : "Agent";
+}
+
+function normalizeLanguage(language: string): string {
+  const normalized = language.trim().toLowerCase();
+  return LANGUAGE_ALIASES[normalized] ?? normalized;
+}
+
+function escapeHtml(value: string): string {
+  return value
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+function highlightedCode(code: string, language: string | null): string {
+  try {
+    if (language && hljs.getLanguage(language)) {
+      return hljs.highlight(code, { language, ignoreIllegals: true }).value;
+    }
+    return hljs.highlightAuto(code).value;
+  } catch {
+    return escapeHtml(code);
+  }
 }
 
 function renderMessage(message: string) {
@@ -39,12 +94,17 @@ function renderMessage(message: string) {
       const lines = part.replace(/^\n/, "").replace(/\n$/, "").split("\n");
       const firstLine = lines[0] ?? "";
       const hasLanguage = firstLine.trim() !== "" && !firstLine.includes(" ");
+      const language = hasLanguage ? normalizeLanguage(firstLine) : null;
       const code = hasLanguage ? lines.slice(1).join("\n") : lines.join("\n");
+      const html = highlightedCode(code, language);
 
       return (
-        <pre className="code-block" key={`code-${index}`}>
-          <code>{code}</code>
-        </pre>
+        <div className="code-frame" key={`code-${index}`}>
+          {language ? <div className="code-language">{language}</div> : null}
+          <pre className="code-block">
+            <code dangerouslySetInnerHTML={{ __html: html }} />
+          </pre>
+        </div>
       );
     }
 
